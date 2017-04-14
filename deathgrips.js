@@ -8,9 +8,11 @@ var ytdl = require("ytdl-core");
 
 var youtube = new YouTube();
 var bot = new Discord.Client();
+
 var key = fs.readFileSync("key.txt", "utf-8").toString().split("\n")[0];
 var token = fs.readFileSync("token.txt", "utf-8").toString().split("\n")[0];
 var youtubeWatchURL = "https://www.youtube.com/watch?v=";
+var durationRE = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/g;
 
 youtube.setKey(key);
 bot.login(token);
@@ -19,6 +21,7 @@ var downloadQueue = [];
 var playQueue = [];
 var textChannel = "";
 var isPlaying = false;
+var continuePlaying = false;
 var dispatcher = "";
 
 var helpMsg = `deathgrips instructions: \n
@@ -27,13 +30,14 @@ var helpMsg = `deathgrips instructions: \n
     !dg play            - Start playing queue in your channel.\n
     !dg skip            - Be bm and skip current thing.\n
     !dg explode         - Be super bm and destroy the whole queue.\n
+    !dg break           - Ends current song and halts queue.\n
     !dg queue           - Look at the queue.
     `;
 
 
 bot.on("message", msg => {
     console.log("Heard message!");
-    console.log(msg);
+    //console.log(msg);
     var found = false;
     if(msg.content.startsWith("!dg") && (msg.author.username != "deathgrips")) {
         var argv = msg.content.split(" ");
@@ -60,16 +64,19 @@ bot.on("message", msg => {
 							    var videoDeets = {
 						    		"id": result.items[i].id.videoId,
 								    "name": result.items[i].snippet.title,
-                                    "length": getVideoLength(result.items[i].id.videoId)
                                 }
-	    						console.log(videoDeets);
-                                msg.channel.sendMessage("Queueing up: " + videoDeets.name + " ["+videoDeets.length+"]");
-		    					downloadQueue.push(videoDeets);
-			    			    console.log(downloadQueue);
-				    			gotVideo = true;
-                                if(downloadQueue.length == 1 && !isPlaying) {
-                                   startQueue(msg);
-                                }
+
+			    	    	    gotVideo = true;
+                                var length = getVideoLength(result.items[i].id.videoId, function(result) {
+                                    videoDeets.length = result;
+                            	    console.log(videoDeets);
+                                    msg.channel.sendMessage("Queueing up: " + videoDeets.name + " ["+videoDeets.length+"]");
+	    	    					downloadQueue.push(videoDeets);
+		    	    			    console.log(downloadQueue);
+                                    if(downloadQueue.length == 1 && !isPlaying) {
+                                       startQueue(msg);
+                                    }
+                                });
     				        }
                         }
 	    				if(!gotVideo) {
@@ -109,7 +116,15 @@ bot.on("message", msg => {
                     msg.channel.sendMessage("number is too high dude");
                 }
             }
-        } else {
+        } else if(command == "break"){
+            if(!isPlaying) {
+                msg.channel.sendMessage("not even playing man");
+            } else {
+                continuePlaying = false;
+                dispatcher.end();
+            }
+        }
+        else {
             msg.channel.sendMessage(helpMsg);
         }
     }
@@ -139,23 +154,25 @@ var startQueue = function(msg) {
 		textChannel = msg.channel;
         voiceChannel.join().then(connection => {
     		if(downloadQueue.length > 0) {
-				playVideo(downloadQueue.shift().id, connection);
+                continuePlaying = true;
+				playVideo(downloadQueue.shift(), connection);
 			}
 		});
     }
 }
 
-var playVideo = function(id, connection) {
-	let stream = ytdl(youtubeWatchURL+id, { audioonly: true });
-    sendNowPlaying(id);
+var playVideo = function(video, connection) {
+	let stream = ytdl(youtubeWatchURL+video.id, { audioonly: true });
+    sendNowPlaying(video.id);
 	isPlaying = true;
 	dispatcher = connection.playStream(stream);
+    bot.user.setGame(video.name);
 	dispatcher.on('end', () => {
 		console.log("end");
 		isPlaying = false;
         console.log(downloadQueue.length);
-		if(downloadQueue.length > 0) {
-			playVideo(downloadQueue.shift().id, connection);
+		if(downloadQueue.length > 0 && continuePlaying) {
+			playVideo(downloadQueue.shift(), connection);
         }
     });
 }
@@ -165,14 +182,37 @@ var sendNowPlaying = function(id) {
     textChannel.sendMessage("Now playing: " + youtubeWatchURL+id);
 }
 
-var getVideoLength = function(id) {
+var getVideoLength = function(id, _callback) {
     youtube.getById(id, function(error, result) {
         if(error) {
             console.log("error getting length");
             console.log(error);
         } else {
-            console.log(JSON.stringify(result, null, 2));
-            return result.items[0].contentDetails.duration;
+            console.log(result.items[0].contentDetails.duration);
+            console.log(durationRE);
+            var match = durationRE.exec(result.items[0].contentDetails.duration);
+            console.log(durationRE);
+            console.log(match);
+            var timeString = "";
+            for(var i=1; i<match.length; i++) {
+                if(match[i] == null) {
+                    timeString += "00";
+                } else {
+                    timeString += padStart(match[i], 2, "0");
+                }
+                if(i != match.length -1) {
+                    timeString += ":";
+                }
+            }
+            durationRE.lastIndex = 0;
+            _callback(timeString);
         }
     });
+}
+
+var padStart = function(value, size, padChar) {
+    while(value.length < size) {
+        value = padChar + value;
+    }
+    return value;
 }
